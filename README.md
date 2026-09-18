@@ -1,5 +1,37 @@
 # unitree-g1-voice
 
+> **Recommended application (2026-09-18):** the current Windows GUI and Jetson
+> Docker voice assistant are in
+> [`apps/g1_voice_assistant`](apps/g1_voice_assistant). The original Python
+> library remains available and unchanged for compatibility.
+
+## Current complete application
+
+The v2 application provides push-to-talk recording, local Chinese/English
+SenseVoice recognition, DeepSeek conversation, on-demand web search, G1
+built-in TTS, a large runtime log, and a Jetson Docker web interface.
+
+```powershell
+cd apps\g1_voice_assistant
+python -m pip install -r requirements-windows.txt
+python g1_remote_voice_gui.pyw --check
+python g1_remote_voice_gui.pyw
+```
+
+The SenseVoice model and local dependency bundle are intentionally excluded
+from Git. See the [application README](apps/g1_voice_assistant/README.md),
+[Windows guide](apps/g1_voice_assistant/图形界面使用说明.md),
+[Jetson Docker guide](apps/g1_voice_assistant/JETSON_DOCKER部署说明.md), and
+[changelog](CHANGELOG.md).
+
+Microphone audio remains local; recognized text is sent to DeepSeek. When web
+search is requested, the query is sent to public search providers and bounded
+search summaries are returned to DeepSeek. The application contains no robot
+motion APIs. Physical robot and Jetson ARM64 behavior must be validated in a
+stationary, supervised environment.
+
+## Legacy approval-gated library
+
 面向 Unitree G1 的 PC 端、显式确认式语音工作流库。本项目独立于宇树固件内置 GPT，不修改、逆向或替换内置服务，也不包含机器人运动、手臂、姿态或灯光控制。
 
 当前版本提供两个入口：
@@ -141,4 +173,3 @@ Remove-Variable secureKey
 ## 项目状态
 
 版本：`0.1.0`（Alpha）。当前适合继续做 PC 端验证和机器人播放适配器开发，不应描述为已完成 G1 实机端到端验收。
-

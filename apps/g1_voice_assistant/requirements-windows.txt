@@ -1,0 +1,5 @@
+ddgs==9.16.0
+numpy>=2.2,<3
+paramiko==4.0.0
+sherpa-onnx==1.13.8
+sounddevice==0.5.6

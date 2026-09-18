@@ -1,0 +1,44 @@
+services:
+  g1-voice:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+      args:
+        CYCLONEDDS_REF: releases/0.10.x
+        UNITREE_SDK_REF: master
+    image: g1-voice-assistant:jetson
+    container_name: g1-voice
+    network_mode: host
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?Set DEEPSEEK_API_KEY before starting}
+      G1_ASR_MODEL_DIR: /models/sensevoice-small-int8
+      G1_ASR_THREADS: ${G1_ASR_THREADS:-2}
+      G1_MIC_INTERFACE_IP: ${G1_MIC_INTERFACE_IP:-192.168.123.164}
+      G1_NETWORK_INTERFACE: ${G1_NETWORK_INTERFACE:-eth0}
+      G1_WEB_SEARCH_ENABLED: ${G1_WEB_SEARCH_ENABLED:-1}
+      G1_WEB_HOST: 0.0.0.0
+      G1_WEB_PORT: ${G1_WEB_PORT:-8090}
+    volumes:
+      - ./asr_models/sensevoice-small-int8:/models/sensevoice-small-int8:ro
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cpus: ${G1_VOICE_CPUS:-2.0}
+    mem_limit: ${G1_VOICE_MEMORY:-2g}
+    stop_grace_period: 10s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('G1_WEB_PORT','8090') + '/healthz', timeout=2).read()
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 60s

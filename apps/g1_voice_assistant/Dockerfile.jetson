@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+FROM python:3.10-slim-bookworm
+
+ARG CYCLONEDDS_REF=releases/0.10.x
+ARG UNITREE_SDK_REF=master
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    CYCLONEDDS_HOME=/opt/cyclonedds \
+    HOME=/tmp
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch "${CYCLONEDDS_REF}" \
+        https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cyclonedds \
+    && cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_EXAMPLES=OFF \
+        -DBUILD_IDLC=ON \
+        -DCMAKE_INSTALL_PREFIX="${CYCLONEDDS_HOME}" \
+    && cmake --build /tmp/cyclonedds/build --parallel 2 \
+    && cmake --install /tmp/cyclonedds/build \
+    && rm -rf /tmp/cyclonedds
+
+RUN python -m pip install --no-cache-dir cyclonedds==0.10.2 \
+    && git clone https://github.com/unitreerobotics/unitree_sdk2_python.git \
+        /opt/unitree_sdk2_python \
+    && git -C /opt/unitree_sdk2_python checkout "${UNITREE_SDK_REF}" \
+    && python -m pip install --no-cache-dir --no-deps /opt/unitree_sdk2_python \
+    && rm -rf /opt/unitree_sdk2_python
+
+WORKDIR /app
+COPY requirements-jetson.txt ./
+RUN python -m pip install --no-cache-dir -r requirements-jetson.txt
+
+COPY g1_gpt_voice_assistant.py g1_web_search.py g1_local_asr.py g1_jetson_web.py ./
+
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin g1voice
+USER 10001:10001
+
+EXPOSE 8090/tcp
+EXPOSE 5555/udp
+
+CMD ["python", "g1_jetson_web.py"]

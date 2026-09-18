@@ -1,0 +1,7 @@
+*
+!Dockerfile.jetson
+!requirements-jetson.txt
+!g1_gpt_voice_assistant.py
+!g1_web_search.py
+!g1_local_asr.py
+!g1_jetson_web.py

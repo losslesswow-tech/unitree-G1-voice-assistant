@@ -112,3 +112,28 @@ generated speech data.
 - Initial branch: `main`.
 - No file was staged or committed.
 - No remote was configured and no network transmission occurred.
+
+## 2026-09-18 — Complete voice assistant v2 publication review
+
+- Scope: `apps/g1_voice_assistant`, root documentation, ignore rules, and
+  changelog.
+- Architecture: Windows GUI plus Jetson Docker application; the legacy Python
+  package remains unchanged.
+- Audio scope: PC microphone or G1 multicast microphone input, local
+  SenseVoiceSmall ASR, G1 TTS/volume/WAV playback. No motion APIs were found or
+  added.
+- Cloud scope: recognized text and bounded conversation history are sent to
+  DeepSeek. Web-search queries are sent to DDGS providers and bounded untrusted
+  result summaries are returned to DeepSeek.
+- Credential scan: no DeepSeek/OpenAI-style API token, GitHub token, or private
+  key pattern was found in the publication file set.
+- Artifact policy: SenseVoice models, local dependency bundles, audio, logs,
+  backups, and environment files are excluded from Git.
+- Runtime validation completed before publication: Python syntax checks, ten
+  unit tests, Windows GUI dependency/model self-check, and Tk layout
+  measurement passed.
+- Container validation completed before publication: Docker build, Unitree
+  AudioClient import, container web search, SenseVoice preload, and Compose
+  health checks passed on Linux/AMD64 Docker Desktop.
+- Remaining boundary: Jetson ARM64, firmware-specific G1 microphone streaming,
+  and physical robot audio behavior require supervised deployment validation.

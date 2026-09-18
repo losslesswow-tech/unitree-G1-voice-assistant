@@ -35,3 +35,12 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Complete G1 voice assistant local-only data
+apps/g1_voice_assistant/gui_deps/
+apps/g1_voice_assistant/asr_models/
+apps/g1_voice_assistant/__pycache__/
+apps/g1_voice_assistant/*.bak-*
+apps/g1_voice_assistant/.env
+apps/g1_voice_assistant/*.wav
+apps/g1_voice_assistant/*.pcm
+apps/g1_voice_assistant/*.raw

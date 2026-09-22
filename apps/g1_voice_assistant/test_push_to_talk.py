@@ -79,6 +79,88 @@ class PushToTalkTests(unittest.TestCase):
         self.assertEqual(assistant._validate_push_to_talk_seconds(120), 120.0)
 
 
+class LocalApiTests(unittest.TestCase):
+    def test_default_local_openai_stream_request(self):
+        class FakeResponse:
+            status = 200
+
+            def __init__(self):
+                self.lines = iter((
+                    'data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}\n'.encode('utf-8'),
+                    'data: {"choices":[{"delta":{"content":"，本地模型已连接。"},"finish_reason":"stop"}]}\n'.encode('utf-8'),
+                    b'data: [DONE]\n',
+                ))
+
+            def getheader(self, name):
+                if name.lower() == 'content-type':
+                    return 'text/event-stream; charset=utf-8'
+                return None
+
+            def readline(self):
+                return next(self.lines, b'')
+
+            def read(self, _size=-1):
+                return b''
+
+        class FakeConnection:
+            def __init__(self):
+                self.request_args = None
+                self.closed = False
+
+            def request(self, method, endpoint, body=None, headers=None):
+                self.request_args = (method, endpoint, body, headers)
+
+            def getresponse(self):
+                return FakeResponse()
+
+            def close(self):
+                self.closed = True
+
+        connection = FakeConnection()
+        with mock.patch.object(
+            assistant.http.client,
+            'HTTPConnection',
+            return_value=connection,
+        ) as connection_factory:
+            reply = assistant.generate_local_reply(
+                '介绍一下你自己',
+                api_key='local-test-key',
+            )
+
+        self.assertEqual(reply, '你好，本地模型已连接。')
+        connection_factory.assert_called_once_with(
+            '127.0.0.1',
+            port=8008,
+            timeout=assistant.LOCAL_API_TIMEOUT_SECONDS,
+        )
+        method, endpoint, body, headers = connection.request_args
+        self.assertEqual(method, 'POST')
+        self.assertEqual(endpoint, '/v1/chat/completions')
+        request_data = json.loads(body.decode('utf-8'))
+        self.assertEqual(request_data['model'], assistant.LOCAL_API_MODEL)
+        self.assertTrue(request_data['stream'])
+        self.assertNotIn('tools', request_data)
+        self.assertEqual(headers['Authorization'], 'Bearer local-test-key')
+        self.assertTrue(connection.closed)
+
+    def test_local_api_key_is_optional(self):
+        with mock.patch.object(
+            assistant,
+            '_local_openai_stream',
+            return_value=('无需密钥也可以回复。', 'stop'),
+        ) as stream:
+            reply = assistant.generate_local_reply('你好', api_key='')
+
+        self.assertEqual(reply, '无需密钥也可以回复。')
+        self.assertEqual(stream.call_args.kwargs['api_key'], '')
+        system_message = stream.call_args.args[0][0]['content']
+        self.assertIn('没有网页搜索工具', system_message)
+
+    def test_local_api_rejects_credentials_in_url(self):
+        with self.assertRaisesRegex(ValueError, '不能包含用户名或密码'):
+            assistant._local_api_target('http://user:pass@127.0.0.1:8008/v1')
+
+
 class WebSearchTests(unittest.TestCase):
     def test_search_returns_only_bounded_safe_http_results(self):
         calls = {}

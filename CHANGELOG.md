@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-22 — Responsive GUI and local model provider
+
+### Added
+
+- Selectable DeepSeek cloud mode and OpenAI-compatible local-model mode in the
+  Windows voice-assistant GUI.
+- Environment-based `LOCAL_AI_BASE_URL`, `LOCAL_AI_MODEL`, and optional
+  `LOCAL_AI_API_KEY` configuration, streaming responses, URL validation, and
+  bounded response parsing. Public defaults use loopback and a generic model
+  placeholder rather than deployment-specific details.
+- Offline transport tests covering the local endpoint, model, optional key,
+  streaming output, and rejection of credentials embedded in URLs.
+
+### Changed
+
+- Updated the default G1 SSH address to `192.168.2.83`.
+- Made the Windows GUI responsive: narrow windows stack the log and controls,
+  compact forms reflow vertically, and short windows use page scrolling.
+- Local-model mode does not expose the web-search tool or claim access to
+  current online information.
+
+### Validation
+
+- Python syntax checks and nine offline unit tests passed.
+- GUI layout checks passed at widths from 700 to 1380 pixels without
+  horizontal overflow.
+
 ## 2026-09-18 — G1 Voice Assistant v2 application
 
 ### Added

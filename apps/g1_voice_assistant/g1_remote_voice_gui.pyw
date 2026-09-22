@@ -22,6 +22,8 @@ if DEPENDENCIES.is_dir():
 from g1_gpt_voice_assistant import (
     deepseek_api_key_from_environment,
     generate_deepseek_reply,
+    generate_local_reply,
+    local_api_key_from_environment,
     record_g1_microphone_push_to_talk,
     record_pc_microphone_push_to_talk,
 )
@@ -36,6 +38,10 @@ DDS_LIB = '/home/unitree/cyclonedds_ws/install/cyclonedds/lib'
 MARKER = 'G1_GUI_RESULT:'
 LANGUAGES = {'自动选择': 'auto', '中文': 'zh', 'English': 'en', '中英混合': 'mixed'}
 MICROPHONE_SOURCES = {'G1 内置麦克风': 'g1', '电脑麦克风': 'pc'}
+AI_PROVIDERS = {
+    'DeepSeek（云端，可联网搜索）': 'deepseek',
+    '本地模型（OpenAI 兼容）': 'local',
+}
 PCM_SAMPLE_RATE = 16000
 PCM_CHANNELS = 1
 PCM_SAMPLE_WIDTH = 2
@@ -198,20 +204,26 @@ class VoiceApp:
         root.title('Unitree G1 · 语音控制')
         screen_width = root.winfo_screenwidth()
         screen_height = root.winfo_screenheight()
-        window_width = max(1000, min(1380, screen_width - 100))
-        window_height = max(720, min(1000, screen_height - 100))
+        window_width = min(1380, max(700, screen_width - 100))
+        window_height = min(1000, max(560, screen_height - 100))
         root.geometry('%sx%s' % (window_width, window_height))
-        root.minsize(min(1000, window_width), min(760, window_height))
+        root.minsize(min(700, window_width), min(520, window_height))
         root.configure(background='#edf2f7')
         root.protocol('WM_DELETE_WINDOW', self.close)
-        self.host = tk.StringVar(value='192.168.123.164')
+        self.host = tk.StringVar(value='192.168.2.83')
         self.user = tk.StringVar(value='unitree')
         self.password = tk.StringVar()
         self.volume = tk.StringVar(value='30')
         self.slider_volume = tk.IntVar(value=30)
         self.language = tk.StringVar(value='自动选择')
         self.microphone_source = tk.StringVar(value='G1 内置麦克风')
+        self.ai_provider = tk.StringVar(value=next(iter(AI_PROVIDERS)))
         self.deepseek_api_key = tk.StringVar(value=deepseek_api_key_from_environment())
+        self.local_api_key = tk.StringVar(value=local_api_key_from_environment())
+        self.api_key_label_text = tk.StringVar()
+        self.api_key_environment_text = tk.StringVar()
+        self.ai_provider_info = tk.StringVar()
+        self.ai_privacy_text = tk.StringVar()
         self.ptt_label = tk.StringVar(value='按住说话')
         self.asr_ready = False
         self.asr_loading = False
@@ -232,31 +244,68 @@ class VoiceApp:
         style.configure('TButton', padding=(12, 8))
         style.configure('Accent.TButton', foreground='white', background='#176b9c')
         style.map('Accent.TButton', background=[('active', '#12587f'), ('disabled', '#8c9da8')])
-        outer = ttk.Frame(root, padding=22)
-        outer.pack(fill='both', expand=True)
-        outer.columnconfigure(0, weight=3, minsize=720)
-        outer.columnconfigure(1, weight=2, minsize=380)
+        self.viewport = ttk.Frame(root)
+        self.viewport.pack(fill='both', expand=True)
+        self.viewport.rowconfigure(0, weight=1)
+        self.viewport.columnconfigure(0, weight=1)
+        self.canvas = tk.Canvas(
+            self.viewport,
+            background='#edf2f7',
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.canvas.grid(row=0, column=0, sticky='nsew')
+        self.page_scrollbar = ttk.Scrollbar(
+            self.viewport,
+            orient='vertical',
+            command=self.canvas.yview,
+        )
+        self.page_scrollbar.grid(row=0, column=1, sticky='ns')
+        self.canvas.configure(yscrollcommand=self.page_scrollbar.set)
+        outer = ttk.Frame(self.canvas, padding=22)
+        self.outer = outer
+        self.canvas_window = self.canvas.create_window(
+            (0, 0),
+            window=outer,
+            anchor='nw',
+        )
+        outer.bind('<Configure>', self._refresh_scroll_region)
+        self.canvas.bind('<Configure>', self._resize_page)
+        root.bind('<Configure>', self._handle_root_resize, add='+')
+        root.bind_all('<MouseWheel>', self._scroll_page, add='+')
+        self._responsive_mode = None
+        outer.columnconfigure(0, weight=3, minsize=0)
+        outer.columnconfigure(1, weight=2, minsize=0)
         outer.rowconfigure(3, weight=1, minsize=90)
         ttk.Label(outer, text='G1 语音控制', style='Title.TLabel').grid(row=0, column=0, sticky='w')
-        ttk.Label(outer, text='编辑中文或英文内容，选择语言和音量，远程播报。').grid(row=1, column=0, sticky='w', pady=(2, 16))
+        self.subtitle_label = ttk.Label(
+            outer,
+            text='编辑中文或英文内容，选择语言和音量，远程播报。',
+        )
+        self.subtitle_label.grid(row=1, column=0, sticky='w', pady=(2, 16))
         connection = ttk.LabelFrame(outer, text='机器人连接', padding=12)
+        self.connection_frame = connection
         connection.grid(row=2, column=0, sticky='ew', pady=(0, 14))
         connection.columnconfigure(1, weight=1)
         connection.columnconfigure(3, weight=1)
-        ttk.Label(connection, text='地址').grid(row=0, column=0, padx=(0, 8))
+        self.host_label = ttk.Label(connection, text='地址')
+        self.host_label.grid(row=0, column=0, padx=(0, 8))
         self.host_entry = ttk.Entry(connection, textvariable=self.host, width=21)
         self.host_entry.grid(row=0, column=1, sticky='ew')
-        ttk.Label(connection, text='用户名').grid(row=0, column=2, padx=8)
+        self.user_label = ttk.Label(connection, text='用户名')
+        self.user_label.grid(row=0, column=2, padx=8)
         self.user_entry = ttk.Entry(connection, textvariable=self.user, width=14)
         self.user_entry.grid(row=0, column=3, sticky='ew')
-        ttk.Label(connection, text='密码').grid(row=1, column=0, pady=(10, 0), padx=(0, 8))
+        self.password_label = ttk.Label(connection, text='密码')
+        self.password_label.grid(row=1, column=0, pady=(10, 0), padx=(0, 8))
         self.password_entry = ttk.Entry(connection, textvariable=self.password, show='●')
         self.password_entry.grid(row=1, column=1, sticky='ew', pady=(10, 0))
         self.connect_button = ttk.Button(connection, text='连接', command=self.connect)
         self.connect_button.grid(row=1, column=2, padx=8, pady=(10, 0))
         self.disconnect_button = ttk.Button(connection, text='断开', command=self.disconnect)
         self.disconnect_button.grid(row=1, column=3, sticky='e', pady=(10, 0))
-        ttk.Label(connection, text='语音助手输入源').grid(row=2, column=0, pady=(10, 0), padx=(0, 8))
+        self.microphone_label = ttk.Label(connection, text='语音助手输入源')
+        self.microphone_label.grid(row=2, column=0, pady=(10, 0), padx=(0, 8))
         self.microphone_box = ttk.Combobox(
             connection,
             textvariable=self.microphone_source,
@@ -265,7 +314,8 @@ class VoiceApp:
             width=18,
         )
         self.microphone_box.grid(row=2, column=1, sticky='w', pady=(10, 0))
-        ttk.Label(connection, text='仅用于 AI 语音助手').grid(row=2, column=2, columnspan=2, sticky='w', pady=(10, 0))
+        self.microphone_help_label = ttk.Label(connection, text='仅用于 AI 语音助手')
+        self.microphone_help_label.grid(row=2, column=2, columnspan=2, sticky='w', pady=(10, 0))
         self.text = scrolledtext.ScrolledText(outer, height=4, wrap='word', font=('Microsoft YaHei UI', 13), relief='flat', padx=12, pady=12)
         self.text.grid(row=3, column=0, sticky='nsew')
         self.text.insert('1.0', '你好，欢迎来到实验室。')
@@ -284,58 +334,102 @@ class VoiceApp:
         ttk.Label(volume_row, text='播报语言').grid(row=2, column=0, sticky='w', pady=(12, 0))
         self.language_box = ttk.Combobox(volume_row, textvariable=self.language, values=tuple(LANGUAGES), state='readonly', width=18)
         self.language_box.grid(row=2, column=1, sticky='w', pady=(12, 0))
-        ttk.Label(volume_row, text='自动：中英文混合时自动分段。中英混合：强制按中英文片段依次播报。', wraplength=670).grid(row=3, column=0, columnspan=4, sticky='w', pady=(6, 0))
+        self.language_help_label = ttk.Label(
+            volume_row,
+            text='自动：中英文混合时自动分段。中英混合：强制按中英文片段依次播报。',
+        )
+        self.language_help_label.grid(row=3, column=0, columnspan=4, sticky='w', pady=(6, 0))
         audio_frame = ttk.LabelFrame(outer, text='外部音频播放', padding=10)
+        self.audio_frame = audio_frame
         audio_frame.grid(row=5, column=0, sticky='ew', pady=(0, 10))
         audio_frame.columnconfigure(1, weight=1)
         self.choose_file_button = ttk.Button(audio_frame, text='选择 WAV 文件', command=self.choose_wav)
         self.choose_file_button.grid(row=0, column=0, padx=(0, 10))
-        ttk.Label(audio_frame, textvariable=self.wav_path, wraplength=540).grid(row=0, column=1, sticky='w')
+        self.wav_path_label = ttk.Label(audio_frame, textvariable=self.wav_path)
+        self.wav_path_label.grid(row=0, column=1, sticky='w')
         self.play_file_button = ttk.Button(audio_frame, text='按此音量播放文件', style='Accent.TButton', command=self.play_wav)
         self.play_file_button.grid(row=0, column=2, padx=(10, 0))
-        ttk.Label(audio_frame, textvariable=self.wav_info, wraplength=760).grid(row=1, column=0, columnspan=3, sticky='w', pady=(8, 0))
+        self.wav_info_label = ttk.Label(audio_frame, textvariable=self.wav_info)
+        self.wav_info_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=(8, 0))
 
         assistant_frame = ttk.LabelFrame(outer, text='AI 语音助手', padding=10)
+        self.assistant_frame = assistant_frame
         assistant_frame.grid(row=6, column=0, sticky='ew', pady=(0, 10))
         assistant_frame.columnconfigure(1, weight=1)
-        ttk.Label(assistant_frame, textvariable=self.asr_status).grid(
+        self.asr_status_label = ttk.Label(assistant_frame, textvariable=self.asr_status)
+        self.asr_status_label.grid(
             row=0, column=0, columnspan=4, sticky='w'
         )
-        ttk.Label(assistant_frame, text='DeepSeek API Key').grid(
-            row=1, column=0, padx=(0, 8), pady=(10, 0)
+        self.ai_provider_label = ttk.Label(assistant_frame, text='AI 服务')
+        self.ai_provider_label.grid(
+            row=1, column=0, padx=(0, 8), pady=(10, 0), sticky='w'
+        )
+        self.ai_provider_box = ttk.Combobox(
+            assistant_frame,
+            textvariable=self.ai_provider,
+            values=tuple(AI_PROVIDERS),
+            state='readonly',
+            width=28,
+        )
+        self.ai_provider_box.grid(
+            row=1, column=1, columnspan=3, sticky='ew', pady=(10, 0)
+        )
+        self.ai_provider_box.bind(
+            '<<ComboboxSelected>>', self._on_ai_provider_changed
+        )
+        self.deepseek_key_label = ttk.Label(
+            assistant_frame,
+            textvariable=self.api_key_label_text,
+        )
+        self.deepseek_key_label.grid(
+            row=2, column=0, padx=(0, 8), pady=(10, 0)
         )
         self.deepseek_api_key_entry = ttk.Entry(
             assistant_frame, textvariable=self.deepseek_api_key, show='●'
         )
         self.deepseek_api_key_entry.grid(
-            row=1, column=1, columnspan=2, sticky='ew', pady=(10, 0)
+            row=2, column=1, columnspan=2, sticky='ew', pady=(10, 0)
         )
-        ttk.Label(assistant_frame, text='也可读取 DEEPSEEK_API_KEY。').grid(
-            row=1, column=3, sticky='w', padx=(8, 0), pady=(10, 0)
+        self.deepseek_env_label = ttk.Label(
+            assistant_frame,
+            textvariable=self.api_key_environment_text,
         )
-        ttk.Label(assistant_frame, text='录音方式').grid(
-            row=2, column=0, sticky='w', pady=(10, 0)
+        self.deepseek_env_label.grid(
+            row=2, column=3, sticky='w', padx=(8, 0), pady=(10, 0)
         )
-        ttk.Label(assistant_frame, text='按住录音，松开发送；安全上限 120 秒').grid(
-            row=2, column=1, columnspan=2, sticky='w', pady=(10, 0)
+        self.ai_provider_info_label = ttk.Label(
+            assistant_frame,
+            textvariable=self.ai_provider_info,
+        )
+        self.ai_provider_info_label.grid(
+            row=3, column=0, columnspan=4, sticky='w', pady=(8, 0)
+        )
+        self.recording_label = ttk.Label(assistant_frame, text='录音方式')
+        self.recording_label.grid(
+            row=4, column=0, sticky='w', pady=(10, 0)
+        )
+        self.recording_help_label = ttk.Label(
+            assistant_frame,
+            text='按住录音，松开发送；安全上限 120 秒',
+        )
+        self.recording_help_label.grid(
+            row=4, column=1, columnspan=2, sticky='w', pady=(10, 0)
         )
         self.ask_button = ttk.Button(
             assistant_frame,
             textvariable=self.ptt_label,
             style='Accent.TButton',
         )
-        self.ask_button.grid(row=2, column=3, sticky='e', padx=(8, 0), pady=(10, 0))
+        self.ask_button.grid(row=4, column=3, sticky='e', padx=(8, 0), pady=(10, 0))
         self.ask_button.bind('<ButtonPress-1>', self.start_push_to_talk, add='+')
         self.ask_button.bind('<ButtonRelease-1>', self.stop_push_to_talk, add='+')
         root.bind_all('<ButtonRelease-1>', self.stop_push_to_talk, add='+')
-        ttk.Label(
+        self.privacy_label = ttk.Label(
             assistant_frame,
-            text=(
-                '录音只在本机内存中交给 SenseVoiceSmall 识别，不上传音频。'
-                '识别文字、最近对话及按需网页搜索结果会发送给 DeepSeek，回复使用 G1 内置 TTS。'
-            ),
-            wraplength=840,
-        ).grid(row=3, column=0, columnspan=4, sticky='w', pady=(8, 0))
+            textvariable=self.ai_privacy_text,
+        )
+        self.privacy_label.grid(row=5, column=0, columnspan=4, sticky='w', pady=(8, 0))
+        self._sync_ai_provider_fields()
         actions = ttk.Frame(outer)
         actions.grid(row=7, column=0, sticky='ew')
         self.read_button = ttk.Button(actions, text='读取当前音量', command=lambda: self.operate('read'))
@@ -344,15 +438,199 @@ class VoiceApp:
         self.set_button.pack(side='left', padx=10)
         self.speak_button = ttk.Button(actions, text='按此音量播报', style='Accent.TButton', command=lambda: self.operate('speak'))
         self.speak_button.pack(side='right')
-        ttk.Label(outer, text='拖动滑块只选择音量；点击按钮后才会发送。0 表示静音。').grid(row=8, column=0, sticky='w', pady=(8, 12))
-        ttk.Label(outer, text='运行日志').grid(row=0, column=1, sticky='w', padx=(18, 0))
+        self.operation_help_label = ttk.Label(
+            outer,
+            text='拖动滑块只选择音量；点击按钮后才会发送。0 表示静音。',
+        )
+        self.operation_help_label.grid(row=8, column=0, sticky='w', pady=(8, 12))
+        self.log_label = ttk.Label(outer, text='运行日志')
+        self.log_label.grid(row=0, column=1, sticky='w', padx=(18, 0))
         self.log = scrolledtext.ScrolledText(outer, height=16, wrap='word', font=('Microsoft YaHei UI', 10), state='disabled', relief='flat', background='#12283a', foreground='#d8e9f6', padx=10, pady=10)
         self.log.grid(row=1, column=1, rowspan=9, sticky='nsew', padx=(18, 0))
-        ttk.Label(outer, textvariable=self.status).grid(row=10, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        self.status_label = ttk.Label(outer, textvariable=self.status)
+        self.status_label.grid(row=10, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        self._apply_responsive_layout(window_width)
         self.note('窗口已就绪。输入密码后点击连接；连接成功会读取当前音量。')
         self.refresh()
         root.after(100, self.poll)
         root.after(250, self.load_local_asr)
+
+    def _refresh_scroll_region(self, _event=None):
+        bounds = self.canvas.bbox(self.canvas_window)
+        if bounds:
+            self.canvas.configure(scrollregion=bounds)
+
+    def _resize_page(self, event):
+        self.canvas.itemconfigure(self.canvas_window, width=max(1, event.width))
+        self._apply_responsive_layout(event.width)
+        self.root.after_idle(self._refresh_scroll_region)
+
+    def _handle_root_resize(self, event):
+        if event.widget is self.root:
+            self.root.after_idle(
+                lambda: self._apply_responsive_layout(self.canvas.winfo_width())
+            )
+
+    def _scroll_page(self, event):
+        if self.closed or not event.delta:
+            return None
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        if widget in (self.text, self.log):
+            return None
+        if widget is None or not str(widget).startswith(str(self.outer)):
+            return None
+        top, bottom = self.canvas.yview()
+        if top <= 0.0 and bottom >= 1.0:
+            return None
+        steps = -1 if event.delta > 0 else 1
+        self.canvas.yview_scroll(steps * 3, 'units')
+        return 'break'
+
+    def _apply_responsive_layout(self, available_width):
+        available_width = max(1, int(available_width))
+        wide = available_width >= 1080
+        compact = available_width < 800
+        mode = ('wide' if wide else 'stacked', 'compact' if compact else 'regular')
+
+        if mode != self._responsive_mode:
+            self._responsive_mode = mode
+            if wide:
+                self.outer.columnconfigure(0, weight=3, minsize=0)
+                self.outer.columnconfigure(1, weight=2, minsize=0)
+                self.log_label.grid_configure(
+                    row=0,
+                    column=1,
+                    columnspan=1,
+                    sticky='w',
+                    padx=(18, 0),
+                    pady=0,
+                )
+                self.log.grid_configure(
+                    row=1,
+                    column=1,
+                    columnspan=1,
+                    rowspan=9,
+                    sticky='nsew',
+                    padx=(18, 0),
+                    pady=0,
+                )
+                self.log.configure(height=16)
+                self.status_label.grid_configure(
+                    row=10,
+                    column=0,
+                    columnspan=2,
+                    sticky='w',
+                    pady=(10, 0),
+                )
+            else:
+                self.outer.columnconfigure(0, weight=1, minsize=0)
+                self.outer.columnconfigure(1, weight=0, minsize=0)
+                self.log_label.grid_configure(
+                    row=9,
+                    column=0,
+                    columnspan=1,
+                    sticky='w',
+                    padx=0,
+                    pady=(8, 6),
+                )
+                self.log.grid_configure(
+                    row=10,
+                    column=0,
+                    columnspan=1,
+                    rowspan=1,
+                    sticky='nsew',
+                    padx=0,
+                    pady=0,
+                )
+                self.log.configure(height=12)
+                self.status_label.grid_configure(
+                    row=11,
+                    column=0,
+                    columnspan=1,
+                    sticky='w',
+                    pady=(10, 0),
+                )
+
+            if compact:
+                self.connection_frame.columnconfigure(1, weight=1)
+                self.connection_frame.columnconfigure(3, weight=0)
+                self.host_label.grid_configure(row=0, column=0, padx=(0, 8), pady=0)
+                self.host_entry.grid_configure(row=0, column=1, columnspan=3, sticky='ew', pady=0)
+                self.user_label.grid_configure(row=1, column=0, padx=(0, 8), pady=(10, 0))
+                self.user_entry.grid_configure(row=1, column=1, columnspan=3, sticky='ew', pady=(10, 0))
+                self.password_label.grid_configure(row=2, column=0, padx=(0, 8), pady=(10, 0))
+                self.password_entry.grid_configure(row=2, column=1, columnspan=3, sticky='ew', pady=(10, 0))
+                self.connect_button.grid_configure(row=3, column=1, columnspan=1, sticky='w', padx=0, pady=(10, 0))
+                self.disconnect_button.grid_configure(row=3, column=2, columnspan=1, sticky='w', padx=(8, 0), pady=(10, 0))
+                self.microphone_label.grid_configure(row=4, column=0, padx=(0, 8), pady=(10, 0))
+                self.microphone_box.grid_configure(row=4, column=1, columnspan=3, sticky='ew', pady=(10, 0))
+                self.microphone_help_label.grid_configure(row=5, column=0, columnspan=4, sticky='w', pady=(6, 0))
+
+                self.choose_file_button.grid_configure(row=0, column=0, columnspan=3, sticky='ew', padx=0, pady=0)
+                self.play_file_button.grid_configure(row=1, column=0, columnspan=3, sticky='ew', padx=0, pady=(8, 0))
+                self.wav_path_label.grid_configure(row=2, column=0, columnspan=3, sticky='w', pady=(8, 0))
+                self.wav_info_label.grid_configure(row=3, column=0, columnspan=3, sticky='w', pady=(8, 0))
+
+                self.asr_status_label.grid_configure(row=0, column=0, columnspan=4, sticky='w')
+                self.ai_provider_label.grid_configure(row=1, column=0, columnspan=4, sticky='w', padx=0, pady=(10, 0))
+                self.ai_provider_box.grid_configure(row=2, column=0, columnspan=4, sticky='ew', pady=(6, 0))
+                self.deepseek_key_label.grid_configure(row=3, column=0, columnspan=4, sticky='w', padx=0, pady=(10, 0))
+                self.deepseek_api_key_entry.grid_configure(row=4, column=0, columnspan=4, sticky='ew', pady=(6, 0))
+                self.deepseek_env_label.grid_configure(row=5, column=0, columnspan=4, sticky='w', padx=0, pady=(6, 0))
+                self.ai_provider_info_label.grid_configure(row=6, column=0, columnspan=4, sticky='w', pady=(8, 0))
+                self.recording_label.grid_configure(row=7, column=0, columnspan=4, sticky='w', pady=(10, 0))
+                self.recording_help_label.grid_configure(row=8, column=0, columnspan=4, sticky='w', pady=(6, 0))
+                self.ask_button.grid_configure(row=9, column=0, columnspan=4, sticky='ew', padx=0, pady=(8, 0))
+                self.privacy_label.grid_configure(row=10, column=0, columnspan=4, sticky='w', pady=(8, 0))
+            else:
+                self.connection_frame.columnconfigure(1, weight=1)
+                self.connection_frame.columnconfigure(3, weight=1)
+                self.host_label.grid_configure(row=0, column=0, padx=(0, 8), pady=0)
+                self.host_entry.grid_configure(row=0, column=1, columnspan=1, sticky='ew', pady=0)
+                self.user_label.grid_configure(row=0, column=2, padx=8, pady=0)
+                self.user_entry.grid_configure(row=0, column=3, columnspan=1, sticky='ew', pady=0)
+                self.password_label.grid_configure(row=1, column=0, padx=(0, 8), pady=(10, 0))
+                self.password_entry.grid_configure(row=1, column=1, columnspan=1, sticky='ew', pady=(10, 0))
+                self.connect_button.grid_configure(row=1, column=2, columnspan=1, sticky='', padx=8, pady=(10, 0))
+                self.disconnect_button.grid_configure(row=1, column=3, columnspan=1, sticky='e', padx=0, pady=(10, 0))
+                self.microphone_label.grid_configure(row=2, column=0, padx=(0, 8), pady=(10, 0))
+                self.microphone_box.grid_configure(row=2, column=1, columnspan=1, sticky='w', pady=(10, 0))
+                self.microphone_help_label.grid_configure(row=2, column=2, columnspan=2, sticky='w', pady=(10, 0))
+
+                self.choose_file_button.grid_configure(row=0, column=0, columnspan=1, sticky='', padx=(0, 10), pady=0)
+                self.wav_path_label.grid_configure(row=0, column=1, columnspan=1, sticky='w', pady=0)
+                self.play_file_button.grid_configure(row=0, column=2, columnspan=1, sticky='', padx=(10, 0), pady=0)
+                self.wav_info_label.grid_configure(row=1, column=0, columnspan=3, sticky='w', pady=(8, 0))
+
+                self.asr_status_label.grid_configure(row=0, column=0, columnspan=4, sticky='w')
+                self.ai_provider_label.grid_configure(row=1, column=0, columnspan=1, sticky='w', padx=(0, 8), pady=(10, 0))
+                self.ai_provider_box.grid_configure(row=1, column=1, columnspan=3, sticky='ew', pady=(10, 0))
+                self.deepseek_key_label.grid_configure(row=2, column=0, columnspan=1, sticky='', padx=(0, 8), pady=(10, 0))
+                self.deepseek_api_key_entry.grid_configure(row=2, column=1, columnspan=2, sticky='ew', pady=(10, 0))
+                self.deepseek_env_label.grid_configure(row=2, column=3, columnspan=1, sticky='w', padx=(8, 0), pady=(10, 0))
+                self.ai_provider_info_label.grid_configure(row=3, column=0, columnspan=4, sticky='w', pady=(8, 0))
+                self.recording_label.grid_configure(row=4, column=0, columnspan=1, sticky='w', pady=(10, 0))
+                self.recording_help_label.grid_configure(row=4, column=1, columnspan=2, sticky='w', pady=(10, 0))
+                self.ask_button.grid_configure(row=4, column=3, columnspan=1, sticky='e', padx=(8, 0), pady=(10, 0))
+                self.privacy_label.grid_configure(row=5, column=0, columnspan=4, sticky='w', pady=(8, 0))
+
+        content_width = max(300, available_width - 44)
+        left_width = content_width if not wide else int((content_width - 18) * 0.6)
+        general_wrap = max(240, left_width - 28)
+        self.subtitle_label.configure(wraplength=general_wrap)
+        self.language_help_label.configure(wraplength=general_wrap)
+        self.wav_path_label.configure(
+            wraplength=max(180, left_width - (28 if compact else 340))
+        )
+        self.wav_info_label.configure(wraplength=general_wrap)
+        self.asr_status_label.configure(wraplength=general_wrap)
+        self.deepseek_env_label.configure(wraplength=general_wrap)
+        self.ai_provider_info_label.configure(wraplength=general_wrap)
+        self.recording_help_label.configure(wraplength=general_wrap)
+        self.privacy_label.configure(wraplength=general_wrap)
+        self.operation_help_label.configure(wraplength=general_wrap)
+        self.status_label.configure(wraplength=max(240, content_width - 28))
+        self.microphone_help_label.configure(wraplength=general_wrap)
 
     def note(self, message):
         self.log.configure(state='normal')
@@ -367,6 +645,38 @@ class VoiceApp:
                 self.slider_volume.set(value)
         except ValueError:
             pass
+
+    def _sync_ai_provider_fields(self):
+        provider = AI_PROVIDERS.get(self.ai_provider.get())
+        if provider not in ('deepseek', 'local'):
+            self.ai_provider.set(next(iter(AI_PROVIDERS)))
+            provider = 'deepseek'
+        if provider == 'local':
+            self.api_key_label_text.set('本地 API Key（可选）')
+            self.api_key_environment_text.set('可读取 LOCAL_AI_API_KEY。')
+            self.deepseek_api_key_entry.configure(textvariable=self.local_api_key)
+            self.ai_provider_info.set(
+                '本地服务由 LOCAL_AI_BASE_URL 和 LOCAL_AI_MODEL 配置。'
+                '本地模式不使用网页搜索。'
+            )
+            self.ai_privacy_text.set(
+                '录音只在本机内存中交给 SenseVoiceSmall 识别，不上传音频。'
+                '识别文字及最近对话仅发送到配置的本地模型服务，回复使用 G1 内置 TTS。'
+            )
+        else:
+            self.api_key_label_text.set('DeepSeek API Key')
+            self.api_key_environment_text.set('也可读取 DEEPSEEK_API_KEY。')
+            self.deepseek_api_key_entry.configure(textvariable=self.deepseek_api_key)
+            self.ai_provider_info.set('DeepSeek 云端模式；需要实时信息时可自动联网搜索。')
+            self.ai_privacy_text.set(
+                '录音只在本机内存中交给 SenseVoiceSmall 识别，不上传音频。'
+                '识别文字、最近对话及按需网页搜索结果会发送给 DeepSeek，回复使用 G1 内置 TTS。'
+            )
+
+    def _on_ai_provider_changed(self, _event=None):
+        self._sync_ai_provider_fields()
+        self.refresh()
+        self.root.after_idle(self._refresh_scroll_region)
 
     def load_local_asr(self):
         if self.closed or self.asr_ready or self.asr_loading:
@@ -394,6 +704,7 @@ class VoiceApp:
             widget.configure(state='normal' if connected and not self.busy else 'disabled')
         self.language_box.configure(state='disabled' if self.busy else 'readonly')
         self.microphone_box.configure(state='disabled' if self.busy else 'readonly')
+        self.ai_provider_box.configure(state='disabled' if self.busy else 'readonly')
         self.deepseek_api_key_entry.configure(state='disabled' if self.busy else 'normal')
         self.ask_button.configure(
             state=(
@@ -548,15 +859,27 @@ class VoiceApp:
             )
             return 'break'
         microphone = MICROPHONE_SOURCES[self.microphone_source.get()]
-        deepseek_key = (
-            self.deepseek_api_key.get().strip()
-            or deepseek_api_key_from_environment()
-        )
-        if not deepseek_key:
-            messagebox.showwarning(
-                '需要 DeepSeek API Key',
-                '请设置 DEEPSEEK_API_KEY，或在窗口中粘贴 Key。',
+        provider = AI_PROVIDERS.get(self.ai_provider.get())
+        if provider == 'deepseek':
+            api_key = (
+                self.deepseek_api_key.get().strip()
+                or deepseek_api_key_from_environment()
             )
+            if not api_key:
+                messagebox.showwarning(
+                    '需要 DeepSeek API Key',
+                    '请设置 DEEPSEEK_API_KEY，或在窗口中粘贴 Key。',
+                )
+                return 'break'
+            provider_name = 'DeepSeek'
+        elif provider == 'local':
+            api_key = (
+                self.local_api_key.get().strip()
+                or local_api_key_from_environment()
+            )
+            provider_name = '本地模型'
+        else:
+            messagebox.showwarning('AI 服务无效', '请选择 DeepSeek 或本地模型。')
             return 'break'
         try:
             volume = int(self.volume.get())
@@ -608,20 +931,33 @@ class VoiceApp:
                 self.events.put(('line', '你：' + question))
 
                 stage_started = time.perf_counter()
-                self.events.put(('line', 'DeepSeek：正在生成回复；需要时会自动联网搜索…'))
-                reply = generate_deepseek_reply(
-                    question,
-                    deepseek_key,
-                    history,
-                    on_status=lambda message: self.events.put(('line', 'DeepSeek：' + message)),
-                )
+                if provider == 'deepseek':
+                    self.events.put(('line', 'DeepSeek：正在生成回复；需要时会自动联网搜索…'))
+                    reply = generate_deepseek_reply(
+                        question,
+                        api_key,
+                        history,
+                        on_status=lambda message: self.events.put(
+                            ('line', 'DeepSeek：' + message)
+                        ),
+                    )
+                else:
+                    self.events.put((
+                        'line',
+                        '本地模型：正在通过 OpenAI 兼容服务生成回复（不使用网页搜索）…',
+                    ))
+                    reply = generate_local_reply(
+                        question,
+                        api_key,
+                        history,
+                    )
                 self.events.put((
                     'line',
-                    '耗时 · DeepSeek 回复：%.2f 秒'
-                    % (time.perf_counter() - stage_started),
+                    '耗时 · %s 回复：%.2f 秒'
+                    % (provider_name, time.perf_counter() - stage_started),
                 ))
                 self.events.put(('assistant_reply', (question, reply)))
-                self.events.put(('line', 'DeepSeek：' + reply))
+                self.events.put(('line', provider_name + '：' + reply))
 
                 stage_started = time.perf_counter()
                 self.events.put(('line', '语音助手：正在提交 G1 内置 TTS…'))

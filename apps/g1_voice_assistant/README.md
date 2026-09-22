@@ -9,10 +9,12 @@ It is separate from the legacy approval-gated Python library in
 - Push-to-talk: press and hold to record, release to send.
 - Selectable Windows PC microphone or G1 UDP microphone input.
 - Local Chinese/English ASR with SenseVoiceSmall INT8 and sherpa-onnx.
-- DeepSeek text conversation with bounded history and concise voice replies.
+- Selectable DeepSeek cloud conversation or OpenAI-compatible local-model
+  conversation, both with bounded history and concise voice replies.
 - On-demand web search through a bounded DeepSeek function tool and DDGS.
 - G1 built-in TTS, volume control, and validated WAV streaming over SSH.
-- Large right-side runtime log in the Windows GUI.
+- Responsive Windows GUI with a large right-side log on wide screens and a
+  stacked, scrollable layout on smaller windows.
 - Jetson Docker web UI with a read-only container filesystem and health check.
 
 There are no robot motion, arm, posture, or locomotion APIs in this application.
@@ -39,6 +41,14 @@ Alternatively, set `G1_ASR_MODEL_DIR` to that model directory. Set
 `DEEPSEEK_API_KEY` in the current process environment or enter it into the GUI.
 The key is not written to the repository or an application configuration file.
 
+The Windows GUI can instead select `本地模型（OpenAI 兼容）`. Configure it with
+`LOCAL_AI_BASE_URL` and `LOCAL_AI_MODEL`; `LOCAL_AI_API_KEY` is optional. The
+public defaults are `http://127.0.0.1:8008/v1` and `local-model`, so deployment
+details remain outside source control. Local mode does not use web search and
+reports that real-time information is unavailable.
+
+The default G1 SSH address in the GUI is `192.168.2.83` and remains editable.
+
 `启动_G1语音控制.cmd` is the convenience launcher used by the original Windows
 workstation. It first checks the bundled local runtime path documented in
 `图形界面使用说明.md`; other computers can use the Python commands above.
@@ -52,7 +62,9 @@ the target Jetson so Docker selects ARM64 dependencies.
 ## Data flow
 
 - Microphone audio stays in memory and is transcribed locally.
-- Recognized text and recent conversation history are sent to DeepSeek.
+- In DeepSeek mode, recognized text and recent history are sent to DeepSeek.
+- In local mode, recognized text and recent history are sent only to the
+  configured OpenAI-compatible service.
 - For current-information queries, the search query is sent to public search
   providers and bounded search summaries are sent to DeepSeek.
 - SSH passwords and API keys remain in process memory and are not logged.
